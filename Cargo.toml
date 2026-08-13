@@ -1,0 +1,8 @@
+[package]
+name = "retium-quest-app"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+# WASM bytecode modulu çıkarmak için cdylib ve rlib tanımlıyoruz
+crate-type = ["cdylib", "rlib"]
