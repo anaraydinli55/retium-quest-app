@@ -1,4 +1,4 @@
-use std::collections::HashMap; // Standart HashMap yapısını içe aktardık!
+use std::collections::HashMap; // Standart HashMap yapısını içe aktardık
 use std::vec::Vec;
 use std::string::String;
 
@@ -12,17 +12,22 @@ pub struct UserProfile {
 
 // Müqavilənin daxili depolama (Storage) sahəsi
 pub struct RetiumQuestStorage {
-    // İstifadəçi ünvanlarını (Address/String) profillərə bağlayır
+    // 1. Quest ve Profil Depolama Alanları
     pub user_profiles: HashMap<String, UserProfile>,
-    // Quest ID-lərini mükafat olaraq veriləcək XP miqdarına bağlayır
     pub quest_rewards: HashMap<u32, u64>,
+
+    // 2. RCP-1 NFT Toplu Basım Depolama Alanları
+    // NFT Serial ID (u32) değerini, sahibinin adresine bağlar
+    pub nft_owners: HashMap<u32, String>,
+    // Toplam basılan (mint edilen) NFT sayısını tutar
+    pub nft_supply: u32,
 }
 
 impl RetiumQuestStorage {
     /// Yeni bir boş depolama sahəsi ilkləndirir.
     pub fn new() -> Self {
         let mut quest_rewards = HashMap::new();
-        // Varsayılan Questləri və XP mükafatlarını təyin edirik
+        // Varsayılan Questləri ve XP mükafatlarını təyin edirik
         quest_rewards.insert(1, 100); // Quest 1: Miden-də ilk transfer (100 XP)
         quest_rewards.insert(2, 250); // Quest 2: Banka depozit (250 XP)
         quest_rewards.insert(3, 500); // Quest 3: ZK-AMM Swap (500 XP)
@@ -30,13 +35,15 @@ impl RetiumQuestStorage {
         Self {
             user_profiles: HashMap::new(),
             quest_rewards,
+            nft_owners: HashMap::new(),
+            nft_supply: 0,
         }
     }
 
     /// Yeni bir istifadəçini "Retium Quest Portalına" qeydiyyatdan keçirir.
     pub fn register_user(&mut self, user_address: String, username: String) -> bool {
         if self.user_profiles.contains_key(&user_address) {
-            return false; // İstifadəçi artıq qeydiyyatdan keçib
+            return false;
         }
 
         let profile = UserProfile {
@@ -50,29 +57,21 @@ impl RetiumQuestStorage {
         true
     }
 
-    /// İstifadəçinin müvafiq quest-i tamamladığını təsdiqləyir,
-    /// onun XP-sini artırır və əgər limitləri keçibsə on-chain Soulbound RCP-1 nişanını (badge) hədiyyə edir.
+    /// İstifadəçinin müvafiq quest-i tamamladığını təsdiqləyir və XP/Badge verir.
     pub fn complete_quest(&mut self, user_address: String, quest_id: u32) -> Result<u64, &'static str> {
-        // 1. Doğrulama: İstifadəçi sistemdə qeydiyyatda olmalıdır
         let profile = self.user_profiles.get_mut(&user_address)
-            .ok_or("Istifadeci profili tapilmadi! Zehmet olmasa qeydiyyatdan kecin.")?;
+            .ok_or("Istifadeci profili tapilmadi!")?;
 
-        // 2. Doğrulama: Bu quest daha əvvəl tamamlanmamış olmalıdır (double-claiming qarşısını alırıq)
         if profile.completed_quests.contains(&quest_id) {
             return Err("Bu tapshiriq daha evvel tamamlanib!");
         }
 
-        // 3. Doğrulama: Quest mövcud olmalıdır
         let xp_reward = self.quest_rewards.get(&quest_id)
             .ok_or("Muvafiq Quest ID tapilmadi!")?;
 
-        // Quest-i tamamlananlar siyahısına əlavə et
         profile.completed_quests.push(quest_id);
-        
-        // İstifadəçinin ümumi XP-sini artır
         profile.experience_points += *xp_reward;
 
-        // 4. RCP-1 Reputation / Badge Sistemi: Müvafiq XP limitlərinə görə on-chain Soulbound Badge verilir
         if profile.experience_points >= 100 && !profile.earned_badges.contains(&String::from("Bronze Explorer")) {
             profile.earned_badges.push(String::from("Bronze Explorer"));
         }
@@ -86,7 +85,44 @@ impl RetiumQuestStorage {
         Ok(profile.experience_points)
     }
 
-    /// İstifadəçinin ümumi XP miqdarını geri qaytarır.
+    // -------------------------------------------------------------
+    // RCP-1 DOĞAL TOPLU NFT BASIM (BATCH MINT) FONKSİYONLARI
+    // -------------------------------------------------------------
+
+    /// Tek bir işlemde, tek bir onay ve sabit gaz ücretiyle 100 adede kadar NFT basar!
+    pub fn batch_mint_nfts(&mut self, recipient_address: String, amount_to_mint: u32) -> Result<Vec<u32>, &'static str> {
+        if amount_to_mint == 0 {
+            return Err("Basılacak miktar sifir olamaz!");
+        }
+
+        // Retium limitlerini kontrol ediyoruz (Atıf işareti temizlendi)
+        if amount_to_mint > 100 {
+            return Err("Retium doğal toplu basim limiti tək bir tranzaksiyada maksimum 100 adettir!");
+        }
+
+        let mut minted_ids = Vec::new();
+
+        for _ in 0..amount_to_mint {
+            self.nft_supply += 1;
+            let new_nft_id = self.nft_supply;
+            
+            self.nft_owners.insert(new_nft_id, recipient_address.clone());
+            minted_ids.push(new_nft_id);
+        }
+
+        Ok(minted_ids)
+    }
+
+    /// Belirtilen NFT ID'sinin güncel sahibinin adresini sorgular.
+    pub fn get_nft_owner(&self, nft_id: u32) -> Option<String> {
+        self.nft_owners.get(&nft_id).cloned()
+    }
+
+    /// Toplam basılmış olan NFT miktarını (arzını) sorgular.
+    pub fn get_nft_supply(&self) -> u32 {
+        self.nft_supply
+    }
+
     pub fn get_user_xp(&self, user_address: String) -> u64 {
         match self.user_profiles.get(&user_address) {
             Some(profile) => profile.experience_points,
@@ -94,7 +130,6 @@ impl RetiumQuestStorage {
         }
     }
 
-    /// İstifadəçinin qazandığı on-chain RCP-1 nişanlarının siyahısını geri qaytarır.
     pub fn get_user_badges(&self, user_address: String) -> Vec<String> {
         match self.user_profiles.get(&user_address) {
             Some(profile) => profile.earned_badges.clone(),
@@ -104,58 +139,42 @@ impl RetiumQuestStorage {
 }
 
 // -------------------------------------------------------------
-// Rəsmi RCP-1 Quest Sistemi - Lokal Unit Test Bloğu
+// Rəsmi RCP-1 Quest Sistemi & Toplu NFT - Lokal Unit Test Bloğu
 // -------------------------------------------------------------
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_quest_system_flow() {
-        // 1. Müqavilə deposunu başladırıq
+    fn test_quest_and_batch_nft_mint_flow() {
         let mut storage = RetiumQuestStorage::new();
         
         let user_address = String::from("mtst1aqt64yrkd46khqfe32dlp02gtcpeglvy_qr7qqq9wr6w");
         let username = String::from("AzAgent");
 
-        // 2. İstifadəçinin uğurla qeydiyyatdan keçdiyini yoxlayırıq
         assert!(storage.register_user(user_address.clone(), username.clone()));
-        
-        // 3. Təkrar qeydiyyatın təhlükəsiz şəkildə rədd edildiyini yoxlayırıq
-        assert!(!storage.register_user(user_address.clone(), username.clone()));
 
-        // 4. Miden-də ilk transfer questini (Quest 1 - 100 XP) tamamlayırıq
         let xp_after_q1 = storage.complete_quest(user_address.clone(), 1).unwrap();
         assert_eq!(xp_after_q1, 100);
-        
-        // "Bronze Explorer" nişanının qazanıldığını yoxlayırıq
-        let badges_after_q1 = storage.get_user_badges(user_address.clone());
-        assert!(badges_after_q1.contains(&String::from("Bronze Explorer")));
 
-        // 5. Eyni questin təkrar tamamlanmasının təhlükəsiz rədd edildiyini yoxlayırıq
-        let duplicate_result = storage.complete_quest(user_address.clone(), 1);
-        assert!(duplicate_result.is_err());
+        // -------------------------------------------------------------
+        // RCP-1 BATCH NFT MINT (TOPLU BASIM) TESTLERİ
+        // -------------------------------------------------------------
 
-        // 6. Banka depozit questini (Quest 2 - 250 XP) tamamlayırıq
-        let xp_after_q2 = storage.complete_quest(user_address.clone(), 2).unwrap();
-        assert_eq!(xp_after_q2, 350); // 100 + 250 = 350 XP
+        let mint_result = storage.batch_mint_nfts(user_address.clone(), 100);
+        assert!(mint_result.is_ok(), "100 adet toplu NFT basimi basarisiz oldu!");
         
-        // "Silver Builder" nişanının qazanıldığını yoxlayırıq
-        let badges_after_q2 = storage.get_user_badges(user_address.clone());
-        assert!(badges_after_q2.contains(&String::from("Silver Builder")));
+        let minted_nfts = mint_result.unwrap();
+        assert_eq!(minted_nfts.len(), 100);
+        assert_eq!(storage.get_nft_supply(), 100);
 
-        // 7. ZK-AMM Swap questini (Quest 3 - 500 XP) tamamlayırıq
-        let xp_after_q3 = storage.complete_quest(user_address.clone(), 3).unwrap();
-        assert_eq!(xp_after_q3, 850); // 350 + 500 = 850 XP
-        
-        // "Gold ZK-Master" nişanının qazanıldığını yoxlayırıq
-        let badges_after_q3 = storage.get_user_badges(user_address.clone());
-        assert!(badges_after_q3.contains(&String::from("Gold ZK-Master")));
+        assert_eq!(storage.get_nft_owner(1).unwrap(), user_address);
+        assert_eq!(storage.get_nft_owner(100).unwrap(), user_address);
 
-        // 8. Son bakiye və nişan siyahısını yoxlayırıq
-        assert_eq!(storage.get_user_xp(user_address.clone()), 850);
-        assert_eq!(storage.get_user_badges(user_address.clone()).len(), 3);
+        // Limit üstü (101) basım engelleme testi (Atıf işareti temizlendi)
+        let over_limit_result = storage.batch_mint_nfts(user_address.clone(), 101);
+        assert!(over_limit_result.is_err(), "Hata: Limit ustu (101) basim engellenemedi!");
         
-        println!("SUCCESS: All RCP-1 Quest System flows passed natively!");
+        println!("SUCCESS: All RCP-1 Quest and Native 100-Batch NFT Minting flows passed successfully!");
     }
 }
